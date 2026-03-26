@@ -424,13 +424,35 @@ const getPythonBin = () => {
   ];
   for (const bin of candidates) {
     try {
-      execSync(`${bin} --version`, { stdio: "ignore" });
-      console.log(`✅ Python binary found: ${bin}`);
-      return bin;
+       const result = execSync(`${bin} --version`, {
+         shell: true,
+         stdio: "pipe",
+         timeout: 5000,
+         encoding: "utf8",
+       });
+       console.log(`✅ Python found: ${bin} → ${result.trim()}`);
+       return bin;
     } catch (_) {
+      console.log(`❌ ${bin} not found: ${err.message?.slice(0, 80)}`);
       continue;
     }
   }
+
+  try {
+    const fullPath = execSync("which python3 || which python", {
+      shell: true,
+      stdio: "pipe",
+      timeout: 3000,
+      encoding: "utf8",
+    }).trim();
+
+    if (fullPath) {
+      console.log(`✅ Python found via which: ${fullPath}`);
+      return fullPath;
+    }
+  } catch (_) {}
+
+
   console.warn("⚠️  No Python binary found — Python submissions will fail");
   return null;
 };
@@ -681,9 +703,10 @@ const runSingleTest = async (language, code, functionName, testCase, jobDir) => 
 
     // Execute
     const { stdout, stderr } = await execAsync(cmd, {
-      timeout:    TIMEOUT,
-      maxBuffer:  MAX_BUFFER,
+      timeout: TIMEOUT,
+      maxBuffer: MAX_BUFFER,
       killSignal: "SIGKILL",
+      shell: true,
     });
 
     const executionTime = Date.now() - start;
