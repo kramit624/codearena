@@ -4,7 +4,7 @@ import { setCredentials, logout } from "../store/slices/authSlice.js";
 
 
 const axiosInstance = axios.create({
-  baseURL: process.env.BASE_URL || "http://localhost:5000/api/v1",
+  baseURL: import.meta.env.VITE_API_URL,
   withCredentials: true,
   headers: {
     "Content-Type": "application/json",

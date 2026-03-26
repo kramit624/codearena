@@ -432,7 +432,7 @@ const LANGUAGE_CONFIG = {
   },
   python: {
     extension: "py",
-    run: (file) => `python ${file}`,
+    run: (file) => `python3 ${file} || python ${file}`,
   },
 };
 
