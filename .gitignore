@@ -1,0 +1,103 @@
+# ================================
+
+# 🔐 ENV FILES (CRITICAL)
+
+# ================================
+
+.env
+.env.*
+!.env.example
+
+# ================================
+
+# 📦 NODE MODULES
+
+# ================================
+
+node_modules/
+**/node_modules/
+
+# ================================
+
+# 🏗️ BUILD / DIST
+
+# ================================
+
+dist/
+build/
+.out/
+.next/
+coverage/
+*.tsbuildinfo
+
+# ================================
+
+# ⚛️ FRONTEND (VITE / REACT)
+
+# ================================
+
+frontend/dist/
+frontend/node_modules/
+
+# ================================
+
+# 🖥️ BACKEND
+
+# ================================
+
+backend/node_modules/
+backend/dist/
+backend/temp/
+backend/uploads/
+backend/logs/
+
+# ================================
+
+# 🐳 DOCKER
+
+# ================================
+
+docker-compose.override.yml
+
+# ================================
+
+# 🧪 TEST / DEBUG
+
+# ================================
+
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ================================
+
+# 💻 OS / EDITOR FILES
+
+# ================================
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ================================
+
+# 🔒 SECRETS / KEYS
+
+# ================================
+
+*.pem
+*.key
+
+# ================================
+
+# 📂 MISC
+
+# ================================
+
+.cache/
+.tmp/
+temp/
