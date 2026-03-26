@@ -393,7 +393,8 @@
 // ✅ TEMP SAFE MULTI-LANG RUNNER
 // ===============================
 
-import { exec } from "child_process";
+
+import { exec, execSync } from "child_process";
 import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
@@ -401,16 +402,64 @@ import { v4 as uuidv4 } from "uuid";
 
 const execAsync = promisify(exec);
 
-const TEMP_DIR = "./temp";
-
-// 🔥 SAFETY LIMITS
-const TIMEOUT = 2000; // prevent infinite loops
-const MAX_BUFFER = 1024 * 1024; // 1MB output
-
-
+// ===============================
+// CONFIG
+// ===============================
+const TEMP_DIR  = "./temp";
+const TIMEOUT   = 5000;       // 5 seconds
+const MAX_BUFFER = 1024 * 1024; // 1MB
 
 // ===============================
-// 🔥 ENSURE TEMP ROOT EXISTS
+// DETECT PYTHON BINARY AT STARTUP
+// ===============================
+const getPythonBin = () => {
+  const candidates = [
+    "python3",
+    "python3.12",
+    "python3.11",
+    "python3.10",
+    "python3.9",
+    "python",
+    "py",
+  ];
+  for (const bin of candidates) {
+    try {
+      execSync(`${bin} --version`, { stdio: "ignore" });
+      console.log(`✅ Python binary found: ${bin}`);
+      return bin;
+    } catch (_) {
+      continue;
+    }
+  }
+  console.warn("⚠️  No Python binary found — Python submissions will fail");
+  return null;
+};
+
+const PYTHON_BIN = getPythonBin();
+
+// ===============================
+// LANGUAGE CONFIG
+// ===============================
+const LANGUAGE_CONFIG = {
+  javascript: {
+    extension: "js",
+    run: (file) => `node "${file}"`,
+  },
+  python: {
+    extension: "py",
+    run: (file) => {
+      if (!PYTHON_BIN) {
+        throw new Error(
+          "Python is not installed on this server. Contact admin."
+        );
+      }
+      return `"${PYTHON_BIN}" "${file}"`;
+    },
+  },
+};
+
+// ===============================
+// ENSURE TEMP ROOT EXISTS
 // ===============================
 const ensureTempRoot = async () => {
   try {
@@ -420,28 +469,11 @@ const ensureTempRoot = async () => {
   }
 };
 
-
-
-// ===============================
-// LANGUAGE CONFIG
-// ===============================
-const LANGUAGE_CONFIG = {
-  javascript: {
-    extension: "js",
-    run: (file) => `node ${file}`,
-  },
-  python: {
-    extension: "py",
-    run: (file) => `python3 ${file} || python ${file}`,
-  },
-};
-
-
-
 // ===============================
 // BUILD RUNNER CODE
 // ===============================
 const buildRunnerCode = (language, code, functionName, input) => {
+  // ── JavaScript ──────────────────────────────────────────────────────────
   if (language === "javascript") {
     return `
 "use strict";
@@ -449,31 +481,95 @@ const buildRunnerCode = (language, code, functionName, input) => {
 ${code}
 
 try {
-  const result = ${functionName}(...${JSON.stringify(input)});
-  console.log(JSON.stringify({ result }));
-} catch (err) {
-  console.log(JSON.stringify({ error: err.message }));
+  const _result = ${functionName}(...${JSON.stringify(input)});
+  process.stdout.write(JSON.stringify({ result: _result }) + "\\n");
+} catch (_err) {
+  process.stdout.write(JSON.stringify({ error: _err.message }) + "\\n");
 }
 `;
   }
 
+  // ── Python ───────────────────────────────────────────────────────────────
   if (language === "python") {
+    // Use base64 to safely pass input — avoids ALL quote/escape issues
+    const inputB64 = Buffer.from(JSON.stringify(input)).toString("base64");
+
+    // Pre-compute name variants so Python doesn't need to do it
+    const snake = functionName.replace(/([A-Z])/g, (m) => "_" + m.toLowerCase());
+    const lower = functionName.toLowerCase();
+
     return `
 import json
+import base64
+import sys
 
 ${code}
 
 try:
-    args = json.loads('${JSON.stringify(input)}')
-    result = ${functionName}(*args)
-    print(json.dumps({"result": result}))
-except Exception as e:
-    print(json.dumps({"error": str(e)}))
+    # Decode input safely via base64
+    _raw  = base64.b64decode("${inputB64}").decode("utf-8")
+    _args = json.loads(_raw)
+
+    # Resolve function — try all name variants
+    _func       = None
+    _candidates = ${JSON.stringify([functionName, snake, lower])}
+
+    for _name in _candidates:
+        _f = globals().get(_name)
+        if _f is not None and callable(_f):
+            _func = _f
+            break
+
+    # Fallback — scan globals ignoring case + underscores
+    if _func is None:
+        _target = "${functionName}".lower().replace("_", "")
+        for _k, _v in list(globals().items()):
+            try:
+                if (
+                    callable(_v)
+                    and hasattr(_v, "__code__")
+                    and not _k.startswith("_")
+                    and _k.lower().replace("_", "") == _target
+                ):
+                    _func = _v
+                    break
+            except Exception:
+                continue
+
+    # Last resort — first user-defined callable
+    if _func is None:
+        for _k, _v in list(globals().items()):
+            try:
+                if (
+                    callable(_v)
+                    and hasattr(_v, "__code__")
+                    and not _k.startswith("_")
+                ):
+                    _func = _v
+                    break
+            except Exception:
+                continue
+
+    if _func is None:
+        _available = [
+            _k for _k, _v in globals().items()
+            if callable(_v) and hasattr(_v, "__code__") and not _k.startswith("_")
+        ]
+        raise NameError(
+            f"Function not found: tried ${functionName}, ${snake}, ${lower}. "
+            f"Available: {_available}"
+        )
+
+    _result = _func(*_args)
+    sys.stdout.write(json.dumps({"result": _result}) + "\\n")
+
+except Exception as _e:
+    sys.stdout.write(json.dumps({"error": str(_e)}) + "\\n")
 `;
   }
+
+  throw new Error(`Unsupported language: ${language}`);
 };
-
-
 
 // ===============================
 // SMART COMPARATOR
@@ -481,158 +577,235 @@ except Exception as e:
 const smartCompare = ({ actual, expected, input, functionName }) => {
   const deepEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+  // Two Sum — any valid index pair is acceptable
   if (functionName === "twoSum") {
-    const nums = input[0];
+    const nums   = input[0];
     const target = input[1];
 
     if (!Array.isArray(actual) || actual.length !== 2) return false;
 
     const [i, j] = actual;
-    if (i === j) return false;
+    if (i === undefined || j === undefined) return false;
+    if (i < 0 || j < 0)                    return false;
+    if (i >= nums.length || j >= nums.length) return false;
+    if (i === j)                            return false;
 
     return nums[i] + nums[j] === target;
   }
 
+  // Sort-insensitive comparisons (order doesn't matter)
+  const SORT_INSENSITIVE = [
+    "groupAnagrams",
+    "findAnagrams",
+    "permutation",
+    "intersect",
+    "intersection",
+    "findDuplicate",
+  ];
+
+  if (
+    SORT_INSENSITIVE.some((fn) =>
+      functionName.toLowerCase().includes(fn.toLowerCase())
+    )
+  ) {
+    if (Array.isArray(actual) && Array.isArray(expected)) {
+      return (
+        JSON.stringify([...actual].sort()) ===
+        JSON.stringify([...expected].sort())
+      );
+    }
+  }
+
+  // Default deep equality
   return deepEqual(actual, expected);
 };
 
+// ===============================
+// PARSE STDOUT SAFELY
+// ===============================
+const parseStdout = (raw) => {
+  // Try direct parse first
+  try {
+    return JSON.parse(raw);
+  } catch (_) {}
 
+  // Try last JSON-looking line (user code may print extra stuff)
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line.startsWith("{") || line.startsWith("[")) {
+      try {
+        return JSON.parse(line);
+      } catch (_) {
+        continue;
+      }
+    }
+  }
+
+  return null; // couldn't parse anything
+};
 
 // ===============================
-// RUN SINGLE TEST
+// RUN SINGLE TEST CASE
 // ===============================
-const runSingleTest = async (
-  language,
-  code,
-  functionName,
-  testCase,
-  jobDir
-) => {
+const runSingleTest = async (language, code, functionName, testCase, jobDir) => {
   const config = LANGUAGE_CONFIG[language];
-  if (!config) throw new Error("Unsupported language");
+  if (!config) throw new Error(`Unsupported language: ${language}`);
 
   const fileName = `${uuidv4()}.${config.extension}`;
   const filePath = path.join(jobDir, fileName);
+  const start    = Date.now();
 
-  const start = Date.now();
+  let cmd;
+  try {
+    cmd = config.run(filePath); // may throw if Python not found
+  } catch (err) {
+    return {
+      input:         testCase.input,
+      expected:      testCase.expected,
+      actual:        null,
+      passed:        false,
+      error:         err.message,
+      executionTime: 0,
+    };
+  }
 
   try {
-    // write temp file
-    await fs.writeFile(
-      filePath,
-      buildRunnerCode(language, code, functionName, testCase.input)
-    );
+    // Write runner file
+    const runnerCode = buildRunnerCode(language, code, functionName, testCase.input);
+    await fs.writeFile(filePath, runnerCode, "utf8");
 
-    // execute safely
-    const { stdout } = await execAsync(config.run(filePath), {
-      timeout: TIMEOUT,
-      maxBuffer: MAX_BUFFER,
+    // Execute
+    const { stdout, stderr } = await execAsync(cmd, {
+      timeout:    TIMEOUT,
+      maxBuffer:  MAX_BUFFER,
       killSignal: "SIGKILL",
     });
 
     const executionTime = Date.now() - start;
-
     const raw = stdout.trim();
 
+    // No output at all
     if (!raw) {
       return {
-        input: testCase.input,
-        expected: testCase.expected,
-        actual: null,
-        passed: false,
-        error: "No output",
+        input:         testCase.input,
+        expected:      testCase.expected,
+        actual:        null,
+        passed:        false,
+        error:         stderr?.trim() || "No output produced",
         executionTime,
       };
     }
 
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
+    // Parse output
+    const parsed = parseStdout(raw);
+
+    if (!parsed) {
       return {
-        input: testCase.input,
-        expected: testCase.expected,
-        actual: raw,
-        passed: false,
-        error: "Invalid output format",
+        input:         testCase.input,
+        expected:      testCase.expected,
+        actual:        raw,
+        passed:        false,
+        error:         `Could not parse output: ${raw.slice(0, 200)}`,
         executionTime,
       };
     }
 
+    // Runtime error inside user code
     if (parsed.error) {
       return {
-        input: testCase.input,
-        expected: testCase.expected,
-        actual: null,
-        passed: false,
-        error: parsed.error,
+        input:         testCase.input,
+        expected:      testCase.expected,
+        actual:        null,
+        passed:        false,
+        error:         parsed.error,
         executionTime,
       };
     }
 
     const actual = parsed.result;
-
     const passed = smartCompare({
       actual,
       expected: testCase.expected,
-      input: testCase.input,
+      input:    testCase.input,
       functionName,
     });
 
     return {
-      input: testCase.input,
+      input:    testCase.input,
       expected: testCase.expected,
       actual,
       passed,
-      error: null,
+      error:         null,
       executionTime,
     };
   } catch (err) {
     const executionTime = Date.now() - start;
 
-    // 🔥 TLE
-    if (err.killed || err.signal === "SIGKILL") {
+    // Time Limit Exceeded
+    if (err.killed || err.signal === "SIGKILL" || err.code === "ETIMEDOUT") {
       return {
-        input: testCase.input,
-        expected: testCase.expected,
-        actual: "Time Limit Exceeded",
-        passed: false,
-        error: "Time Limit Exceeded",
+        input:         testCase.input,
+        expected:      testCase.expected,
+        actual:        "Time Limit Exceeded",
+        passed:        false,
+        error:         "Time Limit Exceeded",
         executionTime,
       };
     }
 
-    // 🔥 Output overflow
-    if (err.message.includes("maxBuffer")) {
+    // Output too large
+    if (err.message?.includes("maxBuffer")) {
       return {
-        input: testCase.input,
-        expected: testCase.expected,
-        actual: null,
-        passed: false,
-        error: "Output Limit Exceeded",
+        input:         testCase.input,
+        expected:      testCase.expected,
+        actual:        null,
+        passed:        false,
+        error:         "Output Limit Exceeded",
+        executionTime,
+      };
+    }
+
+    // Extract useful error from stderr if available
+    const errMsg =
+      err.stderr?.trim() ||
+      err.stdout?.trim() ||
+      err.message ||
+      "Unknown execution error";
+
+    // Try to parse stderr as JSON (our runner might have written there)
+    const parsedErr = parseStdout(errMsg);
+    if (parsedErr?.error) {
+      return {
+        input:         testCase.input,
+        expected:      testCase.expected,
+        actual:        null,
+        passed:        false,
+        error:         parsedErr.error,
         executionTime,
       };
     }
 
     return {
-      input: testCase.input,
-      expected: testCase.expected,
-      actual: err.message,
-      passed: false,
-      error: err.message,
+      input:         testCase.input,
+      expected:      testCase.expected,
+      actual:        null,
+      passed:        false,
+      error:         errMsg.slice(0, 500), // cap error length
       executionTime,
     };
   } finally {
-    try {
-      await fs.unlink(filePath);
-    } catch {}
+    // Always clean up temp file
+    await fs.unlink(filePath).catch(() => {});
   }
 };
 
-
-
 // ===============================
-// MAIN FUNCTION (FINAL)
+// MAIN EXPORT
 // ===============================
 export const runInDocker = async ({
   language = "javascript",
@@ -640,9 +813,28 @@ export const runInDocker = async ({
   functionName,
   testCases,
 }) => {
+  // Fast-fail for unsupported languages
+  if (!LANGUAGE_CONFIG[language]) {
+    throw new Error(
+      `Unsupported language: ${language}. Supported: ${Object.keys(LANGUAGE_CONFIG).join(", ")}`
+    );
+  }
+
+  // Fast-fail for Python if not installed
+  if (language === "python" && !PYTHON_BIN) {
+    return testCases.map((tc) => ({
+      input:         tc.input,
+      expected:      tc.expected,
+      actual:        null,
+      passed:        false,
+      error:         "Python is not installed on this server. Contact admin.",
+      executionTime: 0,
+    }));
+  }
+
   await ensureTempRoot();
 
-  const jobId = uuidv4();
+  const jobId  = uuidv4();
   const jobDir = path.join(TEMP_DIR, jobId);
 
   try {
@@ -651,26 +843,22 @@ export const runInDocker = async ({
     const results = [];
 
     for (const tc of testCases) {
-      const res = await runSingleTest(
+      const result = await runSingleTest(
         language,
         code,
         functionName,
         tc,
         jobDir
       );
-      results.push(res);
+      results.push(result);
     }
 
     return results;
   } catch (err) {
-    console.error("❌ Execution error:", err.message);
+    console.error("❌ runInDocker error:", err.message);
     throw err;
   } finally {
-    try {
-      await fs.rm(jobDir, { recursive: true, force: true });
-      console.log(`🧹 Cleaned temp: ${jobDir}`);
-    } catch (cleanupErr) {
-      console.warn("⚠️ Cleanup failed:", cleanupErr.message);
-    }
+    await fs.rm(jobDir, { recursive: true, force: true }).catch(() => {});
+    console.log(`🧹 Cleaned temp: ${jobDir}`);
   }
 };
