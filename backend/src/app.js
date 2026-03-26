@@ -30,4 +30,9 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/questions", questionRoutes);
 app.use("/api/v1/users", userRoutes);
 
+// backend health check route
+app.get("/api/v1/ok", (req, res) => {
+  res.json({ ok: true, message: "Backend is healthy" });
+});
+
 export default app;
