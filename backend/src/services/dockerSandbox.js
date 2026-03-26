@@ -415,29 +415,30 @@ const MAX_BUFFER = 1024 * 1024; // 1MB
 const getPythonBin = () => {
   const candidates = [
     "python3",
-    "python3.12",
     "python3.11",
     "python3.10",
     "python3.9",
     "python",
-    "py",
   ];
+
   for (const bin of candidates) {
     try {
-       const result = execSync(`${bin} --version`, {
-         shell: true,
-         stdio: "pipe",
-         timeout: 5000,
-         encoding: "utf8",
-       });
-       console.log(`✅ Python found: ${bin} → ${result.trim()}`);
-       return bin;
-    } catch (_) {
-      console.log(`❌ ${bin} not found: ${err.message?.slice(0, 80)}`);
+      execSync(`${bin} --version`, {
+        shell: true,
+        stdio: "pipe",
+        timeout: 3000,
+        encoding: "utf8",
+      });
+      console.log(`✅ Python binary found: ${bin}`);
+      return bin;
+    } catch {
+      // catch without binding — no "err" variable needed
+      console.log(`❌ ${bin} not found`);
       continue;
     }
   }
 
+  // Last resort — try which command
   try {
     const fullPath = execSync("which python3 || which python", {
       shell: true,
@@ -450,8 +451,9 @@ const getPythonBin = () => {
       console.log(`✅ Python found via which: ${fullPath}`);
       return fullPath;
     }
-  } catch (_) {}
-
+  } catch {
+    // which also failed
+  }
 
   console.warn("⚠️  No Python binary found — Python submissions will fail");
   return null;
