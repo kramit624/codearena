@@ -5,8 +5,8 @@ import jwt from "jsonwebtoken";
 // ---- Cookie options (reused across routes) ----
 const cookieOptions = {
   httpOnly: true, // JS can't access via document.cookie → XSS protection
-  secure: process.env.NODE_ENV === "production", // HTTPS only in prod
-  sameSite: "strict",
+  secure: true, // HTTPS only in prod
+  sameSite: "none",
 };
 
 // -------------------------------------------------------
